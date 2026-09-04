@@ -10,7 +10,7 @@ import secrets
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import re
 from difflib import SequenceMatcher
@@ -130,11 +130,7 @@ def login(payload: LoginRequest):
 
 # How often the background poller checks outstanding payment links.
 POLL_INTERVAL_SECONDS = 12
-# Razorpay rejects any expire_by under 15 minutes from now (error: "expire_by:
-# timestamp must be atleast 15 minutes in future"). Keep meaningful headroom
-# above that floor so a slow request round-trip can never push the computed
-# timestamp back under Razorpay's minimum by the time it's received server-side.
-PAYMENT_LINK_EXPIRY_MINUTES = 20
+PAYMENT_LINK_EXPIRY_MINUTES = 10
 _DEAD_LINK_IDS: set[str] = set()  # payment_link_ids confirmed permanently gone (e.g. from a rotated/old
                                    # Razorpay key) — skipped on future poll cycles instead of re-fetched forever
 
@@ -361,26 +357,6 @@ def build_invoice_messages(db: Session, invoice: Invoice) -> list:
             })
             continue
 
-        if log.detected_intent == "AUTOMATED_PROMISE_FOLLOW_UP":
-            # System-triggered when a payment promise's date arrives — never
-            # something the buyer typed, so (like ESCALATION above) it must
-            # render as a single bot message using the reminder_text that was
-            # actually generated, not fall through to the generic buyer+fallback
-            # path below (which is what was happening: it rendered as a fake
-            # buyer bubble reading "SYSTEM: Payment promise follow-up fired",
-            # and since neither this intent nor SEND_PROMISE_FOLLOW_UP is
-            # recognized by synthesize_bot_reply_text, the "reply" collapsed
-            # to the generic "I couldn't quite process that" fallback).
-            messages.append({
-                "sender": "bot",
-                "text": payload.get(
-                    "reminder_text",
-                    "This is a follow-up on the payment you told us to expect.",
-                ),
-                "timestamp": log.timestamp.isoformat(),
-            })
-            continue
-
         if log.detected_intent in ("WEBHOOK_RECONCILIATION", "MANUAL_SYNC", "OVERPAYMENT_FLAG"):
             continue  # internal reconciliation noise, not part of the buyer-facing thread
 
@@ -472,12 +448,12 @@ def synthesize_bot_reply_text(detected_intent: str, action_taken: str, status: s
             if invoice_numbers and len(invoice_numbers) > 1:
                 return (
                     f"Sure! Here's a single payment link covering all {len(invoice_numbers)} "
-                    f"outstanding invoices ({amount_str} total): {url}{expiry_note}"
+                    f"outstanding invoices ({amount_str} total): {url}.{expiry_note}"
                 )
             invoice_number = execution_payload.get("invoice_number")
             if invoice_number:
-                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}{expiry_note}"
-            return f"Sure! Here's your payment link for {amount_str}: {url}{expiry_note}"
+                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}.{expiry_note}"
+            return f"Sure! Here's your payment link for {amount_str}: {url}.{expiry_note}"
         if status == "SUCCESS":
             # Marked SUCCESS but the link URL itself is missing (malformed or
             # legacy payload) — never claim a link exists without actually
@@ -777,18 +753,7 @@ def get_or_create_payment_link(
         invoice_number=invoice.invoice_number,
         description=description or f"Payment for {invoice.invoice_number}",
         reference_id=ref_id,
-        # NOTE: must use datetime.now(timezone.utc), NOT datetime.utcnow().
-        # utcnow() returns a naive datetime — correct in VALUE but with no
-        # tzinfo attached — and calling .timestamp() on a naive datetime
-        # makes Python assume it's in the server's LOCAL timezone, silently
-        # converting it as if it were e.g. IST instead of UTC. On a machine
-        # set to IST (UTC+5:30) that pushes the computed expire_by ~5.5
-        # hours into the past, which is why bumping the minutes buffer
-        # alone (10 -> 20) never fixed the "at least 15 minutes in future"
-        # rejection — the real error was hours, not minutes. now(timezone.utc)
-        # is timezone-AWARE, so .timestamp() converts correctly regardless
-        # of what timezone the server happens to run in.
-        expire_by=int((datetime.now(timezone.utc) + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
+        expire_by=int((datetime.utcnow() + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
         invoice_numbers=invoice_numbers,
     )
     cancel_stale_payment_links(db, invoice, exclude_link_id=link_res["id"])
@@ -1966,6 +1931,22 @@ def pre_process_user_intent(message: str) -> tuple[str | None, str | None, float
     has_amount = bool(re.search(r'₹\s*\d+|\bRS\.?\s*\d+|\b\d{5,}\b', msg_upper))
     fast_amount = _extract_fast_amount(msg_upper) if has_amount else None
 
+    # Negation guard: "I cannot pay", "won't pay", "unable to pay ₹50,000",
+    # etc. all contain the bare word PAY, which would otherwise satisfy the
+    # generic PAY catch-alls below and get misread as the buyer committing
+    # to pay (backwards from what they actually said). When a negation cue
+    # appears near PAY, none of the bare-PAY fast-path rules below should
+    # fire — the message falls through to Gemini instead, same as any other
+    # genuinely ambiguous hardship/refusal statement.
+    _NEGATION_CUE = (
+        r"(?:CAN\s*NOT|CAN\s*\'?T|WON\s*\'?T|WILL\s+NOT|SHAN\s*\'?T|"
+        r"UNABLE(?:\s+TO)?|NOT\s+ABLE(?:\s+TO)?|NO\s+MONEY|NO\s+FUNDS|"
+        r"DON\s*\'?T\s+HAVE|DO\s+NOT\s+HAVE|NOT\s+POSSIBLE|"
+        r"REFUSE(?:\s+TO)?|NEVER\s+GOING\s+TO|NOT\s+GOING\s+TO)"
+    )
+    negated_pay = bool(re.search(rf'\b{_NEGATION_CUE}\b[\w\s]{{0,25}}\bPAY\b', msg_upper)) or \
+        bool(re.search(rf'\bPAY\b[\w\s]{{0,25}}\b{_NEGATION_CUE}\b', msg_upper))
+
     # High-confidence exception/safety intents. These must bypass Gemini so a
     # transient model outage cannot turn a buyer claim into a payment action.
     if re.search(r'\b(UTR|TRANSACTION\s*(ID|REFERENCE)?|TXN|PAYMENT\s*REFERENCE|REFERENCE\s*(NO|NUMBER)?)\b', msg_upper):
@@ -2004,10 +1985,10 @@ def pre_process_user_intent(message: str) -> tuple[str | None, str | None, float
         return extracted_inv, "DISPUTE", fast_amount
 
     # Firm-level payment command. Never route this through Gemini.
-    if re.search(r'\bPAY\s+ALL\b', msg_upper) or any(x in msg_upper for x in [
+    if not negated_pay and (re.search(r'\bPAY\s+ALL\b', msg_upper) or any(x in msg_upper for x in [
         "PAY ALL MY INVOICES", "PAY ALL PENDING INVOICES", "CLEAR ALL MY BILLS",
         "SETTLE ALL MY INVOICES", "PAY EVERYTHING",
-    ]):
+    ])):
         return extracted_inv, "MULTI_INVOICE_PAYMENT", None
 
     # Future payment commitments must beat the generic PAY + amount rule.
@@ -2023,7 +2004,7 @@ def pre_process_user_intent(message: str) -> tuple[str | None, str | None, float
         msg_upper
     ))
 
-    if future_signal and (fast_amount is not None or future_commitment or re.search(r'\b(PAY|GIVE|CLEAR|SETTLE|DE)\b', msg_upper)):
+    if not negated_pay and future_signal and (fast_amount is not None or future_commitment or re.search(r'\b(PAY|GIVE|CLEAR|SETTLE|DE)\b', msg_upper)):
         return extracted_inv, "PROMISE_TO_PAY", fast_amount
 
     # Explicit invoice-copy request.
@@ -2039,14 +2020,14 @@ def pre_process_user_intent(message: str) -> tuple[str | None, str | None, float
         re.search(rf'\b{re.escape(phrase)}\b', msg_upper)
         for phrase in ["FULL", "ALL", "CLEAR", "SETTLE", "EVERYTHING", "COMPLETE"]
     )
-    if full_signal and re.search(r'\b(PAY|CLEAR|SETTLE)\b', msg_upper):
+    if not negated_pay and full_signal and re.search(r'\b(PAY|CLEAR|SETTLE)\b', msg_upper):
         return extracted_inv, "FULL_PAYMENT", None
 
     # Immediate partial payment: only the explicit PAY verb, never PAYMENT.
-    if re.search(r'\bPAY\b', msg_upper) and fast_amount is not None:
+    if not negated_pay and re.search(r'\bPAY\b', msg_upper) and fast_amount is not None:
         return extracted_inv, "PARTIAL_PAYMENT", fast_amount
 
-    if re.search(r'\bPAY\b', msg_upper):
+    if not negated_pay and re.search(r'\bPAY\b', msg_upper):
         return extracted_inv, "FULL_PAYMENT", None
 
     return extracted_inv, None, None
