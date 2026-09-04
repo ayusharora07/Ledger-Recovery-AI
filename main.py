@@ -1932,20 +1932,65 @@ def pre_process_user_intent(message: str) -> tuple[str | None, str | None, float
     fast_amount = _extract_fast_amount(msg_upper) if has_amount else None
 
     # Negation guard: "I cannot pay", "won't pay", "unable to pay ₹50,000",
-    # etc. all contain the bare word PAY, which would otherwise satisfy the
-    # generic PAY catch-alls below and get misread as the buyer committing
-    # to pay (backwards from what they actually said). When a negation cue
-    # appears near PAY, none of the bare-PAY fast-path rules below should
-    # fire — the message falls through to Gemini instead, same as any other
-    # genuinely ambiguous hardship/refusal statement.
+    # "I cannot make the payment", etc. all contain a pay-related word, which
+    # would otherwise satisfy the generic PAY catch-alls below and get
+    # misread as the buyer committing to pay (backwards from what they
+    # actually said). When a negation cue appears near a pay-word, none of
+    # the bare-PAY fast-path rules below should fire — the message falls
+    # through to Gemini instead, same as any other genuinely ambiguous
+    # hardship/refusal statement.
+    #
+    # NOTE: this must match "PAYMENT" as well as "PAY" — "I cannot be able
+    # to make the payment" contains no standalone "PAY" token (word-boundary
+    # regex \bPAY\b does not match inside "PAYMENT"), so an English refusal
+    # phrased around "the payment" rather than the bare verb "pay" was
+    # silently missing this guard entirely and falling through to the LLM
+    # with the same non-deterministic-classification problem as the
+    # Hindi/Hinglish case below.
     _NEGATION_CUE = (
         r"(?:CAN\s*NOT|CAN\s*\'?T|WON\s*\'?T|WILL\s+NOT|SHAN\s*\'?T|"
         r"UNABLE(?:\s+TO)?|NOT\s+ABLE(?:\s+TO)?|NO\s+MONEY|NO\s+FUNDS|"
         r"DON\s*\'?T\s+HAVE|DO\s+NOT\s+HAVE|NOT\s+POSSIBLE|"
         r"REFUSE(?:\s+TO)?|NEVER\s+GOING\s+TO|NOT\s+GOING\s+TO)"
     )
-    negated_pay = bool(re.search(rf'\b{_NEGATION_CUE}\b[\w\s]{{0,25}}\bPAY\b', msg_upper)) or \
-        bool(re.search(rf'\bPAY\b[\w\s]{{0,25}}\b{_NEGATION_CUE}\b', msg_upper))
+    _PAY_WORD = r"PAY(?:MENT)?"
+    negated_pay = bool(re.search(rf'\b{_NEGATION_CUE}\b[\w\s]{{0,25}}\b{_PAY_WORD}\b', msg_upper)) or \
+        bool(re.search(rf'\b{_PAY_WORD}\b[\w\s]{{0,25}}\b{_NEGATION_CUE}\b', msg_upper))
+
+    # Hindi/Hinglish refusal-to-pay cue: buyers very commonly write this in
+    # transliterated Hindi rather than English, e.g. "payment nii kr paunga",
+    # "paise nii de paunga", "nahi de paunga". None of this matches
+    # _NEGATION_CUE above (that's English-only) or the bare \bPAY\b rules
+    # below (the buyer wrote "PAYMENT"/"PAISE", not "PAY"), so without this
+    # check the message fell through to Gemini with no dedicated intent to
+    # classify it as — see CANNOT_PAY in agent_engine.py — and got randomly
+    # split between UNKNOWN and other near-fits on different runs of the
+    # exact same message. This check makes that refusal deterministic instead.
+    _HINDI_NEGATION = r"(?:NAHI|NAHIN|NAI|NII|NHI)"
+    _HINDI_PAY_CUE = r"(?:PAYMENT|PAISE|PAISA|RUPAYE|RUPYE|PAY)"
+    _HINDI_INABILITY_VERB = r"PA(?:U|O)N(?:G|N)[AI]"  # paunga / paungi / paoonga / paoongi
+    hinglish_cannot_pay = (
+        bool(re.search(rf'\b{_HINDI_NEGATION}\b[\w\s]{{0,20}}\b{_HINDI_PAY_CUE}\b', msg_upper)) or
+        bool(re.search(rf'\b{_HINDI_PAY_CUE}\b[\w\s]{{0,20}}\b{_HINDI_NEGATION}\b', msg_upper)) or
+        bool(re.search(rf'\b{_HINDI_NEGATION}\b[\w\s]{{0,20}}\b{_HINDI_INABILITY_VERB}\b', msg_upper))
+    )
+
+    # A flat refusal/inability statement is itself unambiguous and always
+    # needs human review — never let the generic PAY/FULL/PROMISE catch-alls
+    # below or the LLM guess at it. Checked before every other fast-path rule.
+    if negated_pay or hinglish_cannot_pay:
+        # Still allow a *future* commitment layered on top of the refusal
+        # ("can't pay today, but I'll pay Friday") to route as a promise
+        # instead — only a bare refusal with no future date becomes CANNOT_PAY.
+        has_future_date = bool(re.search(
+            r'\b(?:TOMORROW|TONIGHT|NEXT\s+WEEK|NEXT\s+MONTH|'
+            r'NEXT\s+(?:MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)|'
+            r'(?:MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)|'
+            r'MONTH\s+END|BY\s+NEXT|IN\s+\d+\s+(?:DAY|DAYS|WEEK|WEEKS))\b',
+            msg_upper
+        ))
+        if not has_future_date:
+            return extracted_inv, "CANNOT_PAY", None
 
     # High-confidence exception/safety intents. These must bypass Gemini so a
     # transient model outage cannot turn a buyer claim into a payment action.
@@ -2555,7 +2600,7 @@ def simulate_message(req: SimulateMessageRequest, db: Session = Depends(get_db),
         "FULL_PAYMENT", "PARTIAL_PAYMENT", "PROMISE_TO_PAY",
         "ALREADY_PAID", "PAYMENT_PENDING", "PAYMENT_FAILED",
         "PAYMENT_PROOF", "PAYMENT_PLAN_REQUEST", "DISPUTE",
-        "MULTI_INVOICE_PAYMENT", "REQUEST_INVOICE",
+        "MULTI_INVOICE_PAYMENT", "REQUEST_INVOICE", "CANNOT_PAY",
     }
 
     if fast_intent in deterministic_intents:
@@ -2606,6 +2651,7 @@ def simulate_message(req: SimulateMessageRequest, db: Session = Depends(get_db),
             "FULL_PAYMENT", "PARTIAL_PAYMENT", "PROMISE_TO_PAY",
             "ALREADY_PAID", "PAYMENT_PENDING", "PAYMENT_FAILED",
             "PAYMENT_PROOF", "PAYMENT_PLAN_REQUEST", "DISPUTE",
+            "CANNOT_PAY",
         } and active_inv is None:
             synthetic_extracted = ExtractedIntent(
                 intent=IntentType[fast_intent], extracted_amount=fast_amount,

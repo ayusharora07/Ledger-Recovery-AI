@@ -37,6 +37,7 @@ class IntentType(str, enum.Enum):
     PAYMENT_FAILED = "PAYMENT_FAILED"
     PAYMENT_PROOF = "PAYMENT_PROOF"
     PAYMENT_PLAN_REQUEST = "PAYMENT_PLAN_REQUEST"
+    CANNOT_PAY = "CANNOT_PAY"
     MULTI_INVOICE_PAYMENT = "MULTI_INVOICE_PAYMENT"
     CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
     UNKNOWN = "UNKNOWN"
@@ -160,6 +161,7 @@ Classify the message into exactly one intent:
 - PAYMENT_FAILED: buyer says payment/link/transaction failed or was declined.
 - PAYMENT_PROOF: buyer provides a UTR, transaction/reference number, screenshot mention, or other proof that payment was made.
 - PAYMENT_PLAN_REQUEST: buyer asks for extra time, installments, or a payment plan rather than simply naming one future payment date.
+- CANNOT_PAY: buyer states outright that they are unable to pay, refuse to pay, or have no money — with NO future date/promise, NO explicit ask for installments/a payment plan, and NOT a dispute about the bill itself. This includes Hindi/Hinglish refusal phrasing (e.g. "nahi", "nai", "nii", "nhi" combined with a pay/give verb like "kar paunga", "kr paunga", "de paunga", "paunga", "paisa/paise nahi hai").
 - MULTI_INVOICE_PAYMENT: buyer explicitly asks to pay/clear all pending invoices or the full account balance.
 - CLARIFICATION_REQUIRED: message is meaningful but cannot safely be mapped to a single invoice/action without asking a question (for example a bare "kal" when no active promise/context resolves it).
 - UNKNOWN: use ONLY if the message truly does not fit any category above after considering all rules below. Do not default to UNKNOWN just because the phrasing is casual or informal.
@@ -171,6 +173,7 @@ Disambiguation rules (apply in this order):
 3. If a future date/day is mentioned instead of "today/now" -> PROMISE_TO_PAY, and set promise_date_iso, regardless of whether an amount is mentioned.
 3b. If a short RELATIVE duration is mentioned instead of a calendar date/day -> PROMISE_TO_PAY.
 3c. If the buyer asks for extra time/instalments without a concrete payment date -> PAYMENT_PLAN_REQUEST.
+3d. If the buyer states outright inability or refusal to pay — with NO future date/promise, NO explicit request for extra time/installments, and no dispute reason — -> CANNOT_PAY. Do not classify this as CLARIFICATION_REQUIRED or UNKNOWN just because no amount/date was given; a flat refusal is itself unambiguous and must be routed to human review, not left unclassified.
 4. If the buyer says payment was already made -> ALREADY_PAID. If they provide a UTR/reference/screenshot/proof -> PAYMENT_PROOF. If they say it is processing/pending -> PAYMENT_PENDING. If they say it failed/declined -> PAYMENT_FAILED.
 5. If the buyer explicitly says "pay all", "clear all", "all pending bills", "close my account" or equivalent -> MULTI_INVOICE_PAYMENT.
 6. If a message is too ambiguous to safely attach to one invoice/action, prefer CLARIFICATION_REQUIRED rather than guessing.
@@ -209,6 +212,9 @@ Examples:
 - "Transaction fail ho gaya" -> PAYMENT_FAILED.
 - "UTR 1234567890, payment kar di" -> PAYMENT_PROOF, payment_reference="1234567890".
 - "15 din do, phir 20k aur next week" -> PAYMENT_PLAN_REQUEST.
+- "Main payment nahi kar paunga" -> CANNOT_PAY (flat refusal, no date, no plan ask).
+- "Main paise nahi de paunga" -> CANNOT_PAY.
+- "I cannot pay, I have no money right now" -> CANNOT_PAY.
 - "PAY ALL" -> MULTI_INVOICE_PAYMENT.
 - "Aaj 20k bhej raha hu, baaki 60k next week" -> PARTIAL_PAYMENT, extracted_amount=20000, remaining_promise_amount=60000, promise_date_iso resolved to next week.
 
@@ -345,6 +351,11 @@ def validate_intent_action(extracted: ExtractedIntent, invoice) -> ValidationRes
         return ValidationResult(
             allowed=True, action=ActionType.ESCALATE, final_amount=None,
             reason="Payment-plan/credit-extension request requires wholesaler approval."
+        )
+    if extracted.intent == IntentType.CANNOT_PAY:
+        return ValidationResult(
+            allowed=True, action=ActionType.ESCALATE, final_amount=None,
+            reason="Buyer states they are unable/refusing to pay, with no date, plan request, or dispute reason; requires human review."
         )
     if extracted.intent == IntentType.MULTI_INVOICE_PAYMENT:
         return ValidationResult(
