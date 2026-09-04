@@ -10,7 +10,7 @@ import secrets
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 import re
 from difflib import SequenceMatcher
@@ -130,7 +130,11 @@ def login(payload: LoginRequest):
 
 # How often the background poller checks outstanding payment links.
 POLL_INTERVAL_SECONDS = 12
-PAYMENT_LINK_EXPIRY_MINUTES = 10
+# Razorpay rejects any expire_by under 15 minutes from now (error: "expire_by:
+# timestamp must be atleast 15 minutes in future"). Keep meaningful headroom
+# above that floor so a slow request round-trip can never push the computed
+# timestamp back under Razorpay's minimum by the time it's received server-side.
+PAYMENT_LINK_EXPIRY_MINUTES = 20
 _DEAD_LINK_IDS: set[str] = set()  # payment_link_ids confirmed permanently gone (e.g. from a rotated/old
                                    # Razorpay key) — skipped on future poll cycles instead of re-fetched forever
 
@@ -357,6 +361,26 @@ def build_invoice_messages(db: Session, invoice: Invoice) -> list:
             })
             continue
 
+        if log.detected_intent == "AUTOMATED_PROMISE_FOLLOW_UP":
+            # System-triggered when a payment promise's date arrives — never
+            # something the buyer typed, so (like ESCALATION above) it must
+            # render as a single bot message using the reminder_text that was
+            # actually generated, not fall through to the generic buyer+fallback
+            # path below (which is what was happening: it rendered as a fake
+            # buyer bubble reading "SYSTEM: Payment promise follow-up fired",
+            # and since neither this intent nor SEND_PROMISE_FOLLOW_UP is
+            # recognized by synthesize_bot_reply_text, the "reply" collapsed
+            # to the generic "I couldn't quite process that" fallback).
+            messages.append({
+                "sender": "bot",
+                "text": payload.get(
+                    "reminder_text",
+                    "This is a follow-up on the payment you told us to expect.",
+                ),
+                "timestamp": log.timestamp.isoformat(),
+            })
+            continue
+
         if log.detected_intent in ("WEBHOOK_RECONCILIATION", "MANUAL_SYNC", "OVERPAYMENT_FLAG"):
             continue  # internal reconciliation noise, not part of the buyer-facing thread
 
@@ -448,12 +472,12 @@ def synthesize_bot_reply_text(detected_intent: str, action_taken: str, status: s
             if invoice_numbers and len(invoice_numbers) > 1:
                 return (
                     f"Sure! Here's a single payment link covering all {len(invoice_numbers)} "
-                    f"outstanding invoices ({amount_str} total): {url}.{expiry_note}"
+                    f"outstanding invoices ({amount_str} total): {url}{expiry_note}"
                 )
             invoice_number = execution_payload.get("invoice_number")
             if invoice_number:
-                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}.{expiry_note}"
-            return f"Sure! Here's your payment link for {amount_str}: {url}.{expiry_note}"
+                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}{expiry_note}"
+            return f"Sure! Here's your payment link for {amount_str}: {url}{expiry_note}"
         if status == "SUCCESS":
             # Marked SUCCESS but the link URL itself is missing (malformed or
             # legacy payload) — never claim a link exists without actually
@@ -753,7 +777,18 @@ def get_or_create_payment_link(
         invoice_number=invoice.invoice_number,
         description=description or f"Payment for {invoice.invoice_number}",
         reference_id=ref_id,
-        expire_by=int((datetime.utcnow() + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
+        # NOTE: must use datetime.now(timezone.utc), NOT datetime.utcnow().
+        # utcnow() returns a naive datetime — correct in VALUE but with no
+        # tzinfo attached — and calling .timestamp() on a naive datetime
+        # makes Python assume it's in the server's LOCAL timezone, silently
+        # converting it as if it were e.g. IST instead of UTC. On a machine
+        # set to IST (UTC+5:30) that pushes the computed expire_by ~5.5
+        # hours into the past, which is why bumping the minutes buffer
+        # alone (10 -> 20) never fixed the "at least 15 minutes in future"
+        # rejection — the real error was hours, not minutes. now(timezone.utc)
+        # is timezone-AWARE, so .timestamp() converts correctly regardless
+        # of what timezone the server happens to run in.
+        expire_by=int((datetime.now(timezone.utc) + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
         invoice_numbers=invoice_numbers,
     )
     cancel_stale_payment_links(db, invoice, exclude_link_id=link_res["id"])
