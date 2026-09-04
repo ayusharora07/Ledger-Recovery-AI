@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LedgerRecover AI — Revenue Recovery Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .live-dot { animation: pulse-dot 1.5s infinite; }
+</style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+
+<div id="loginOverlay" class="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center">
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
+    <div class="flex items-center gap-2 mb-1">
+      <div class="w-9 h-9 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-bold">₹</div>
+      <div class="font-bold text-lg text-slate-800">LedgerRecover AI</div>
+    </div>
+    <p class="text-sm text-slate-500 mb-5">Enter the wholesaler dashboard password to continue.</p>
+    <input id="loginPassword" type="password" placeholder="Password"
+      class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-2" />
+    <div id="loginError" class="text-xs text-red-600 mb-2 hidden">Incorrect password. Try again.</div>
+    <button id="loginBtn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg py-2 text-sm">
+      Log In
+    </button>
+  </div>
+</div>
+
+<header class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between shadow-md">
+  <div class="flex items-center gap-3">
+    <div class="w-9 h-9 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-lg">₹</div>
+    <div>
+      <h1 class="text-lg font-semibold leading-tight">LedgerRecover AI</h1>
+      <p class="text-xs text-slate-400 leading-tight">Autonomous B2B Trade Collection Agent — Razorpay AI Buildathon</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-2 text-sm text-emerald-400">
+    <span class="w-2 h-2 bg-emerald-400 rounded-full live-dot"></span>
+    Live Agent Monitoring
+  </div>
+</header>
+
+<main class="max-w-[1600px] mx-auto p-5 grid grid-cols-1 xl:grid-cols-12 gap-5">
+
+  <!-- COLLECTION COMMAND CENTER -->
+  <section class="xl:col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="font-semibold text-slate-800">Today's Collections</h2>
+        <p class="text-xs text-slate-500">Who needs attention, why, and what the agent should do next.</p>
+      </div>
+      <button onclick="loadCollectionCenter()" class="text-xs px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">↻ Refresh</button>
+    </div>
+    <div id="collection-metrics" class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3"></div>
+    <div id="collection-queue" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3"></div>
+  </section>
+
+  <!-- LEDGER PANEL (Firm View) -->
+ <section class="xl:col-span-5 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
+  <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+    <h2 class="font-semibold text-slate-800">Wholesaler Ledger — Firm View</h2>
+    <div class="flex items-center gap-2">
+      <span id="ledger-count" class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full">0 firms</span>
+      <!-- NEW (Feature 4): total_settled badge, shown only on the Settled tab -->
+      <span id="ledger-settled-total" class="hidden text-xs bg-emerald-50 text-emerald-700 px-2 py-1 rounded-full font-semibold"></span>
+      <button onclick="openOnboardModal()"
+        class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3 py-1.5 rounded-lg text-xs transition">
+        + Onboard Invoice
+      </button>
+    </div>
+  </div>
+
+  <!-- NEW (Feature 4): Active / Settled filter tabs -->
+  <div class="px-5 pt-2 flex items-center gap-1 border-b border-slate-200">
+    <button id="tab-active" onclick="setLedgerView('active')"
+      class="text-xs font-semibold px-3 py-2 border-b-2 border-emerald-600 text-emerald-700 transition">
+      Active Balances
+    </button>
+    <button id="tab-settled" onclick="setLedgerView('settled')"
+      class="text-xs font-semibold px-3 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition">
+      Settled / Paid History
+    </button>
+  </div>
+
+  <div class="overflow-y-auto scrollbar-thin flex-1" style="max-height: 640px;">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-slate-500 text-xs uppercase sticky top-0">
+        <tr>
+          <th class="text-left px-4 py-2">Firm</th>
+          <th class="text-left px-4 py-2">Phone</th>
+          <th class="text-right px-4 py-2" id="ledger-amount-col-header">Outstanding</th>
+          <th class="text-center px-4 py-2">Invoices</th>
+          <th class="text-center px-4 py-2 relative">
+            <button id="status-filter-btn" type="button" onclick="toggleStatusFilterMenu(event)"
+              class="inline-flex items-center gap-1 uppercase text-xs font-semibold tracking-wide text-slate-500 hover:text-slate-700">
+              <span id="status-filter-label">Status</span>
+              <svg class="w-3 h-3 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
+            </button>
+            <div id="status-filter-menu" class="hidden absolute right-2 top-8 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 w-40 text-left normal-case">
+              <button type="button" data-status="ALL" onclick="applyStatusFilter('ALL')" class="status-filter-option w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">All statuses</button>
+              <button type="button" data-status="PENDING" onclick="applyStatusFilter('PENDING')" class="status-filter-option w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">Pending</button>
+              <button type="button" data-status="PARTIALLY_PAID" onclick="applyStatusFilter('PARTIALLY_PAID')" class="status-filter-option w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">Partially Paid</button>
+              <button type="button" data-status="DISPUTED" onclick="applyStatusFilter('DISPUTED')" class="status-filter-option w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">Disputed</button>
+              <button type="button" data-status="PAID" onclick="applyStatusFilter('PAID')" class="status-filter-option w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">Paid</button>
+            </div>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="ledger-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Firm Invoices Modal (click a firm row) -->
+<div id="firmInvoicesModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+  <div class="bg-white p-6 rounded-xl shadow-xl max-w-2xl w-full">
+    <div class="flex items-center justify-between mb-4">
+      <h3 id="firmInvoicesTitle" class="text-lg font-bold text-slate-800">Firm Invoices</h3>
+      <button onclick="document.getElementById('firmInvoicesModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+    <div id="firmInvoicesBody" class="space-y-2 max-h-[420px] overflow-y-auto scrollbar-thin"></div>
+    <div id="firmInsightsPanel" class="hidden mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3"></div>
+    <div class="flex justify-end gap-2 pt-4">
+      <button id="firmInsightsBtn" class="px-4 py-2 border border-emerald-600 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">🧠 AI Insights</button>
+      <button id="firmInvoicesMessageBtn" class="px-4 py-2 bg-[#075E54] text-white rounded-lg text-sm font-semibold hover:bg-[#0a6d5f]">Message this Firm →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Firm Analysis Report: full trend report with charts -->
+<div id="firmAnalysisModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto scrollbar-thin">
+    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
+      <div>
+        <h3 id="analysisFirmName" class="text-lg font-bold text-slate-800">Analysis Report</h3>
+        <div id="analysisFirmSub" class="text-xs text-slate-500"></div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="analysisRiskBadge" class="text-xs px-2 py-1 rounded-full font-semibold hidden"></span>
+        <button onclick="document.getElementById('firmAnalysisModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+      </div>
+    </div>
+    <div id="analysisBody" class="p-6 space-y-6">
+      <div class="text-sm text-slate-500">Loading analysis…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Collections Copilot: floating launcher + chat panel -->
+<button id="copilotLauncher" title="Collections Copilot"
+  class="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center justify-center text-2xl">
+  🤖
+</button>
+<div id="copilotPanel" class="hidden fixed bottom-24 right-6 z-40 w-[360px] h-[480px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+  <div class="bg-slate-900 text-white px-4 py-3 flex items-center justify-between">
+    <div>
+      <div class="font-semibold text-sm">🤖 Collections Copilot</div>
+      <div class="text-[10px] text-slate-300">Ask about your whole portfolio</div>
+    </div>
+    <button id="copilotCloseBtn" class="text-slate-300 hover:text-white text-xl leading-none">&times;</button>
+  </div>
+  <div id="copilotMessages" class="flex-1 overflow-y-auto scrollbar-thin bg-slate-50 p-3 space-y-2 text-sm"></div>
+  <div class="p-2 flex gap-2 border-t border-slate-200 bg-white">
+    <input id="copilotInput" type="text" placeholder="e.g. which firms need a reminder?"
+      class="flex-1 border border-slate-300 rounded-full px-3 py-2 text-sm" />
+    <button id="copilotSendBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full w-9 h-9 flex items-center justify-center flex-shrink-0">➤</button>
+  </div>
+</div>
+
+<!-- Onboarding Modal -->
+<div id="onboardModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+  <div class="bg-white p-6 rounded-xl shadow-xl max-w-md w-full">
+    <h3 class="text-lg font-bold mb-4 text-slate-800">Onboard Client & Invoice</h3>
+    <form id="onboardForm" onsubmit="handleOnboard(event)" class="space-y-3">
+
+      <div>
+        <label class="text-xs font-semibold text-slate-500">Firm</label>
+        <div class="flex gap-2 mt-1">
+          <label class="flex items-center gap-1 text-xs text-slate-600">
+            <input type="radio" name="firmMode" value="existing" checked onchange="toggleFirmMode()"> Existing Firm
+          </label>
+          <label class="flex items-center gap-1 text-xs text-slate-600">
+            <input type="radio" name="firmMode" value="new" onchange="toggleFirmMode()"> New Firm
+          </label>
+        </div>
+      </div>
+
+      <div id="existingFirmField">
+        <label class="text-xs font-semibold text-slate-500">Select Firm</label>
+        <select id="obExistingFirm" class="w-full border rounded-lg p-2 text-sm"></select>
+      </div>
+
+      <div id="newFirmFields" class="hidden space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Client Name</label>
+          <input type="text" id="obName" class="w-full border rounded-lg p-2 text-sm" placeholder="e.g. Ramesh Patel">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Business Name</label>
+          <input type="text" id="obBusiness" class="w-full border rounded-lg p-2 text-sm" placeholder="e.g. Patel Garments">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-500">WhatsApp Phone Number</label>
+          <input type="text" id="obPhone" class="w-full border rounded-lg p-2 text-sm" placeholder="9876543210">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Total Bill (₹)</label>
+          <input type="number" id="obTotal" step="0.01" required class="w-full border rounded-lg p-2 text-sm" placeholder="100000">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Upfront Paid (₹)</label>
+          <input type="number" id="obUpfront" step="0.01" class="w-full border rounded-lg p-2 text-sm" placeholder="20000">
+        </div>
+      </div>
+
+      <!-- NEW (Feature 3): required Due Date field, defaulted to +30 days in openOnboardModal() -->
+      <div>
+        <label class="text-xs font-semibold text-slate-500">Due Date</label>
+        <input type="date" id="obDueDate" required class="w-full border rounded-lg p-2 text-sm">
+      </div>
+
+      <div class="flex justify-end space-x-2 pt-3">
+        <button type="button" onclick="document.getElementById('onboardModal').classList.add('hidden')" class="px-4 py-2 border text-slate-600 rounded-lg text-sm">Cancel</button>
+        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700">Create & Send WhatsApp Bot</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+  <!-- WHATSAPP SIMULATOR -->
+  <section class="xl:col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
+  <div class="p-4 border-b border-slate-200">
+    <label class="text-xs font-medium text-slate-500">Select Firm / Phone Number</label>
+    <select id="firm-select" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></select>
+  </div>
+
+  <div class="flex-1 flex flex-col p-3">
+    <div class="rounded-xl overflow-hidden border border-slate-300 shadow-sm flex flex-col h-[450px]">
+      <div class="bg-[#075E54] text-white px-4 py-3 flex items-center gap-3">
+        <div id="chat-avatar" class="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center font-bold text-sm">?</div>
+        <div>
+          <div id="chat-client-name" class="text-sm font-semibold leading-tight">Select a firm</div>
+          <div class="text-[10px] text-emerald-200 leading-tight flex items-center gap-1">
+            <span class="w-1.5 h-1.5 bg-emerald-300 rounded-full"></span> Online
+          </div>
+        </div>
+      </div>
+
+      <div id="chat-messages" class="flex-1 overflow-y-auto scrollbar-thin bg-[#efeae2] p-3 space-y-2"></div>
+
+      <div class="bg-slate-100 border-t border-slate-200 p-2 flex items-center gap-2">
+        <input id="message-input" type="text" placeholder="Type a message..."
+          class="flex-1 border border-slate-300 rounded-full px-4 py-2 text-sm focus:outline-none" />
+        <button id="send-btn" class="bg-[#075E54] hover:bg-[#0a6d5f] text-white rounded-full w-10 h-10 flex items-center justify-center flex-shrink-0">➤</button>
+        <button id="check-payment-btn" title="Check payment status now" class="bg-slate-500 hover:bg-slate-600 text-white rounded-full w-10 h-10 flex items-center justify-center flex-shrink-0">🔄</button>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 text-xs mt-3">
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="I can pay 1 lakh today">₹1L today</button>
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="I will clear the full amount now">Full payment</button>
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="Please send me the bill copy">Request invoice</button>
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="I'll pay next Friday, remind me then">Promise Friday</button>
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="Remind me in 10 mins">Remind in 10 min</button>
+      <button class="quick-msg bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md" data-msg="This bill amount is wrong, goods were damaged">Dispute</button>
+      <!-- NEW (Feature 2): PAY ALL quick-reply, intercepted deterministically server-side -->
+      <button class="quick-msg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-semibold px-2 py-1 rounded-md" data-msg="PAY ALL">Pay All</button>
+    </div>
+  </div>
+</section>
+
+  <!-- AUDIT LOG PANEL -->
+  <section class="xl:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
+    <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+      <h2 class="font-semibold text-slate-800">Developer Audit Trace</h2>
+      <span class="text-xs text-slate-400">auto-refreshing</span>
+    </div>
+    <div id="audit-body" class="overflow-y-auto scrollbar-thin flex-1 p-3 space-y-2" style="max-height: 640px;"></div>
+  </section>
+
+</main>
+
+<script>
+// --------------------------------------------------------------------------
+// AUTH — single wholesaler login, signed session token from /api/auth/login.
+// Stored in localStorage (plain webapp served by our own FastAPI backend,
+// not a sandboxed artifact — localStorage is the normal, correct choice
+// here). authFetch() attaches it to every API call and bounces back to the
+// login screen on a 401 (expired/invalid session).
+// --------------------------------------------------------------------------
+let authToken = localStorage.getItem('lr_auth_token') || null;
+
+function showLoginOverlay() {
+  document.getElementById('loginOverlay').classList.remove('hidden');
+}
+function hideLoginOverlay() {
+  document.getElementById('loginOverlay').classList.add('hidden');
+}
+
+async function authFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${authToken}` };
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) {
+    authToken = null;
+    localStorage.removeItem('lr_auth_token');
+    showLoginOverlay();
+    throw new Error('Session expired — please log in again');
+  }
+  return res;
+}
+
+// Appends the session token as a query param, for plain <a href> download
+// links (invoice/receipt/combined PDFs) that can't send an Authorization
+// header — the backend's require_auth() accepts either form.
+function withAuthToken(url) {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(authToken || '')}`;
+}
+
+async function doLogin() {
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  errorEl.classList.add('hidden');
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const data = await res.json();
+    authToken = data.token;
+    localStorage.setItem('lr_auth_token', authToken);
+    hideLoginOverlay();
+    startApp();
+  } catch (err) {
+    errorEl.textContent = 'Could not reach the server. Try again.';
+    errorEl.classList.remove('hidden');
+  }
+}
+
+document.getElementById('loginBtn').addEventListener('click', doLogin);
+document.getElementById('loginPassword').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+
+const firmSelect = document.getElementById('firm-select');
+const ledgerBody = document.getElementById('ledger-body');
+const ledgerCount = document.getElementById('ledger-count');
+const ledgerSettledTotal = document.getElementById('ledger-settled-total'); // NEW (Feature 4)
+const ledgerAmountColHeader = document.getElementById('ledger-amount-col-header'); // NEW (Feature 4)
+const auditBody = document.getElementById('audit-body');
+const sendBtn = document.getElementById('send-btn');
+const messageInput = document.getElementById('message-input');
+const chatMessages = document.getElementById('chat-messages');
+const chatClientName = document.getElementById('chat-client-name');
+const chatAvatar = document.getElementById('chat-avatar');
+
+let firmMeta = {};          // client_id -> { name, business_name, phone_number }
+let currentFirmId = null;   // firm currently loaded in the simulator
+let renderedMessageCount = 0;
+let currentTargetInvoiceId = null; // which invoice a new message resolves to, per backend
+let ledgerView = 'active';  // NEW (Feature 4): 'active' | 'settled' — drives /api/firms?view=
+let currentStatusFilter = 'ALL'; // drives the Status column header dropdown filter
+let lastFirmsData = [];          // last /api/firms response, cached so the status filter can re-render without a refetch
+
+const statusStyles = {
+  PENDING: 'bg-amber-100 text-amber-700',
+  PARTIALLY_PAID: 'bg-blue-100 text-blue-700',
+  PAID: 'bg-emerald-100 text-emerald-700',
+  DISPUTED: 'bg-red-100 text-red-700',
+};
+
+const STATUS_LABELS = {
+  ALL: 'Status',
+  PENDING: 'Pending',
+  PARTIALLY_PAID: 'Partially Paid',
+  PAID: 'Paid',
+  DISPUTED: 'Disputed',
+};
+
+// Small inline WhatsApp glyph — sized relative to the phone number text via
+// its own width/height so it stays proportionate wherever it's used.
+const WHATSAPP_ICON_SVG = `<svg viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12.004 2.003c-5.514 0-9.997 4.483-9.997 9.997 0 1.762.464 3.482 1.345 4.997L2 22l5.116-1.343a9.96 9.96 0 004.888 1.244h.004c5.514 0 9.997-4.483 9.997-9.997 0-2.67-1.04-5.18-2.929-7.07a9.933 9.933 0 00-7.072-2.828zm0 18.166h-.003a8.253 8.253 0 01-4.21-1.153l-.302-.18-3.037.797.811-2.96-.197-.304a8.24 8.24 0 01-1.263-4.37c0-4.554 3.706-8.26 8.264-8.26 2.207 0 4.281.86 5.842 2.421a8.207 8.207 0 012.418 5.845c0 4.554-3.706 8.26-8.263 8.26z"/></svg>`;
+
+function toggleStatusFilterMenu(e) {
+  e.stopPropagation();
+  document.getElementById('status-filter-menu').classList.toggle('hidden');
+}
+
+// Close the dropdown on any click outside it (or outside its trigger button).
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('status-filter-menu');
+  const btn = document.getElementById('status-filter-btn');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (!menu.contains(e.target) && !btn.contains(e.target)) {
+    menu.classList.add('hidden');
+  }
+});
+
+function applyStatusFilter(status) {
+  currentStatusFilter = status;
+  document.getElementById('status-filter-menu').classList.add('hidden');
+  document.getElementById('status-filter-label').textContent = STATUS_LABELS[status] || status;
+  document.querySelectorAll('.status-filter-option').forEach(btn => {
+    const isSelected = btn.dataset.status === status;
+    btn.classList.toggle('bg-slate-100', isSelected);
+    btn.classList.toggle('font-semibold', isSelected);
+    btn.classList.toggle('text-emerald-700', isSelected);
+  });
+  renderLedgerRows(lastFirmsData);
+}
+
+const auditStatusStyles = {
+  SUCCESS: 'border-emerald-300 bg-emerald-50',
+  BLOCKED: 'border-amber-300 bg-amber-50',
+  FAILED: 'border-red-300 bg-red-50',
+};
+
+function fmtMoney(n) {
+  return '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function formatBotText(text) {
+  if (!text) return '';
+  const escaped = escapeHtml(text);
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return escaped.replace(urlRegex, url =>
+    `<br/><a href="${url}" target="_blank" class="inline-block mt-1 bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-emerald-700">Open Payment Link →</a>`
+  );
+}
+
+function appendBubble(sender, html, pdfUrl) {
+  const wrap = document.createElement('div');
+  wrap.className = `flex ${sender === 'buyer' ? 'justify-end' : 'justify-start'}`;
+  const bubble = document.createElement('div');
+  // NEW (Feature 2/5): whitespace-pre-wrap so multi-invoice breakdowns and
+  // greeting text (which use literal \n / \n\n) actually render as line
+  // breaks instead of collapsing into one line.
+  bubble.className = `max-w-[80%] rounded-lg px-3 py-2 text-sm shadow-sm whitespace-pre-wrap ${sender === 'buyer' ? 'bg-[#dcf8c6]' : 'bg-white'}`;
+  bubble.innerHTML = html;
+  if (pdfUrl) {
+    // NEW (Feature 5): distinguish a zero-balance clearance receipt from a
+    // standard invoice PDF so the button label matches what it downloads.
+    const isReceipt = pdfUrl.includes('/receipt-pdf');
+    const btn = document.createElement('a');
+    btn.href = withAuthToken(pdfUrl);
+    btn.target = '_blank';
+    btn.className = isReceipt
+      ? 'inline-block mt-2 bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-emerald-800'
+      : 'inline-block mt-2 bg-slate-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-slate-800';
+    btn.textContent = isReceipt ? '📄 Download Payment Receipt' : '📄 Download Invoice PDF';
+    bubble.appendChild(document.createElement('br'));
+    bubble.appendChild(btn);
+  }
+  wrap.appendChild(bubble);
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return wrap;
+}
+function appendOptionChips(options) {
+  if (!options || options.length === 0) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'flex flex-wrap gap-2 mt-1 mb-2 justify-start';
+  options.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bg-white border border-emerald-300 text-emerald-700 text-xs font-medium px-3 py-1.5 rounded-full shadow-sm hover:bg-emerald-50 transition';
+    btn.textContent = opt.title;
+    btn.addEventListener('click', () => {
+      messageInput.value = opt.payload;
+      if (opt.id.startsWith('OPT_PARTIAL')) {
+        messageInput.focus();
+        messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
+      } else {
+        sendBtn.click();
+      }
+    });
+    wrap.appendChild(btn);
+  });
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendAccountSummaryBubble(summary) {
+  const wrap = document.createElement('div');
+  wrap.className = 'flex justify-start';
+  const bubble = document.createElement('div');
+  bubble.className = 'max-w-[85%] rounded-lg px-3 py-2 text-sm shadow-sm bg-white border border-emerald-200';
+
+  const rows = summary.unpaid_invoices.map(inv => `
+    <div class="flex justify-between text-xs py-1 border-t border-slate-100">
+      <span class="text-slate-600">${inv.invoice_number} <span class="text-slate-400">(due ${fmtDate(inv.due_date)})</span></span>
+      <span class="font-medium">${fmtMoney(inv.balance_amount)}</span>
+    </div>
+  `).join('');
+
+  bubble.innerHTML = `
+    <div class="font-semibold text-emerald-700 mb-1">📋 Account Summary — ${escapeHtml(summary.business_name)}</div>
+    <div class="text-xs text-slate-500 mb-1">Total Outstanding</div>
+    <div class="text-lg font-bold text-slate-800 mb-1">${fmtMoney(summary.total_outstanding)}</div>
+    ${summary.unpaid_invoices.length ? rows : '<div class="text-xs text-emerald-600 mt-1">All invoices settled ✓</div>'}
+  `;
+  wrap.appendChild(bubble);
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendTypingIndicator() {
+  const wrap = document.createElement('div');
+  wrap.className = 'flex justify-start';
+  wrap.innerHTML = `<div class="bg-white rounded-lg px-3 py-2 text-sm shadow-sm text-slate-400 italic">typing...</div>`;
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return wrap;
+}
+
+function updateChatHeader() {
+  const meta = firmMeta[firmSelect.value];
+  if (!meta) return;
+  chatClientName.textContent = `${meta.name} (${meta.business_name})`;
+  chatAvatar.textContent = meta.name.charAt(0).toUpperCase();
+}
+
+let firmSwitchToken = 0;
+
+async function loadFirmChatHistory(clientId, { fullReload = false, syncTargetInvoice = true } = {}) {
+  if (!clientId) return;
+
+  const isSwitch = fullReload || clientId != currentFirmId;
+  const myToken = isSwitch ? ++firmSwitchToken : firmSwitchToken;
+
+  const historyRes = await authFetch(`/api/firms/${clientId}/chat-history`);
+  const historyData = await historyRes.json();
+  if (myToken !== firmSwitchToken) return;
+
+  if (syncTargetInvoice) {
+    currentTargetInvoiceId = historyData.target_invoice_id;
+  }
+
+  if (isSwitch) {
+    currentFirmId = clientId;
+    renderedMessageCount = 0;
+    chatMessages.innerHTML = '';
+
+    const summaryRes = await authFetch(`/api/firms/${clientId}/account-summary`);
+    if (myToken !== firmSwitchToken) return;
+    const summary = await summaryRes.json();
+    if (myToken !== firmSwitchToken) return;
+    appendAccountSummaryBubble(summary);
+  }
+
+  const newMessages = historyData.messages.slice(renderedMessageCount);
+  if (newMessages.length === 0 && !isSwitch) {
+    return; // nothing changed on this poll — don't touch scroll position at all
+  }
+
+  // "Stick to bottom" pattern: a real switch always jumps to bottom (fresh
+  // view), but a background poll only follows along if you were already
+  // near the bottom — if you've scrolled up to read history, leave it alone.
+  const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 120;
+
+  newMessages.forEach(m => appendBubble(m.sender, formatBotText(m.text), m.invoice_pdf_url));
+  renderedMessageCount = historyData.messages.length;
+
+  if (isSwitch || wasNearBottom) {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+}
+
+
+
+
+
+
+// NEW (Feature 4): toggles the ledger between Active Balances and
+// Settled / Paid History, restyles the tabs, and reloads the table.
+function setLedgerView(view) {
+  if (ledgerView === view) return;
+  ledgerView = view;
+
+  const activeTab = document.getElementById('tab-active');
+  const settledTab = document.getElementById('tab-settled');
+  const isActive = view === 'active';
+
+  activeTab.classList.toggle('border-emerald-600', isActive);
+  activeTab.classList.toggle('text-emerald-700', isActive);
+  activeTab.classList.toggle('border-transparent', !isActive);
+  activeTab.classList.toggle('text-slate-500', !isActive);
+
+  settledTab.classList.toggle('border-emerald-600', !isActive);
+  settledTab.classList.toggle('text-emerald-700', !isActive);
+  settledTab.classList.toggle('border-transparent', isActive);
+  settledTab.classList.toggle('text-slate-500', isActive);
+
+  ledgerAmountColHeader.textContent = isActive ? 'Outstanding' : 'Settled Bill Total';
+
+  loadFirms();
+}
+
+async function loadFirms() {
+  const currentSelectedId = firmSelect.value;
+
+  const res = await authFetch(`/api/firms?view=${ledgerView}`);
+  const data = await res.json();
+  lastFirmsData = data.firms;
+  firmSelect.innerHTML = '';
+  firmMeta = {};
+
+  // NEW (Feature 4): total_settled is a response-level figure (only present
+  // when view=settled) — each firm's own total_outstanding is always 0 in
+  // this view since settled invoices have no balance left, so this badge is
+  // what actually shows "how much has been collected historically".
+  if (ledgerView === 'settled') {
+    ledgerSettledTotal.textContent = `${fmtMoney(data.total_settled || 0)} total settled`;
+    ledgerSettledTotal.classList.remove('hidden');
+  } else {
+    ledgerSettledTotal.classList.add('hidden');
+  }
+
+  data.firms.forEach(firm => {
+    firmMeta[firm.client_id] = { name: firm.name, business_name: firm.business_name, phone_number: firm.phone_number };
+
+    const opt = document.createElement('option');
+    opt.value = firm.client_id;
+    opt.textContent = `${firm.business_name} — ${firm.phone_number} (${fmtMoney(firm.total_outstanding)} due)`;
+    firmSelect.appendChild(opt);
+  });
+
+  if (currentSelectedId) firmSelect.value = currentSelectedId;
+  renderLedgerRows(data.firms);
+  updateChatHeader();
+}
+
+// Renders the ledger table body from the given firm list, applying
+// currentStatusFilter (set via the Status column header dropdown). The firm
+// selector dropdown for the chat simulator always lists every firm — only
+// the table itself is filtered — since narrowing the table shouldn't hide a
+// firm from the "who am I chatting as" picker.
+function renderLedgerRows(firms) {
+  const filtered = currentStatusFilter === 'ALL'
+    ? firms
+    : firms.filter(f => f.status === currentStatusFilter);
+
+  ledgerCount.textContent = currentStatusFilter === 'ALL'
+    ? `${firms.length} firms`
+    : `${filtered.length} of ${firms.length} firms`;
+
+  ledgerBody.innerHTML = '';
+
+  if (filtered.length === 0) {
+    const emptyRow = document.createElement('tr');
+    emptyRow.innerHTML = `<td colspan="5" class="px-4 py-6 text-center text-xs text-slate-400">No firms match this filter.</td>`;
+    ledgerBody.appendChild(emptyRow);
+    return;
+  }
+
+  filtered.forEach(firm => {
+    const row = document.createElement('tr');
+    row.className = 'border-b border-slate-100 hover:bg-slate-50 cursor-pointer';
+    row.onclick = () => openFirmInvoicesModal(firm.client_id);
+    row.innerHTML = `
+      <td class="px-4 py-2">
+        <div class="flex items-center gap-1.5">
+          <span class="font-medium">${firm.business_name}</span>
+          <button onclick="event.stopPropagation(); openFirmAnalysisModal(${firm.client_id})" title="Analysis report for ${firm.business_name}"
+            class="inline-flex items-center justify-center text-slate-400 hover:text-emerald-600 flex-shrink-0 text-sm">
+            📊
+          </button>
+        </div>
+        <div class="text-xs text-slate-400">${firm.name}</div>
+      </td>
+      <td class="px-4 py-2 text-xs text-slate-500">
+        <span class="inline-flex items-center gap-1.5">
+          ${firm.phone_number}
+          <button onclick="event.stopPropagation(); goToFirmChat(${firm.client_id})" title="Message ${firm.business_name} on WhatsApp"
+            class="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700 flex-shrink-0">
+            ${WHATSAPP_ICON_SVG}
+          </button>
+        </span>
+      </td>
+      <td class="px-4 py-2 text-right font-semibold">${fmtMoney(firm.total_outstanding)}</td>
+      <td class="px-4 py-2 text-center text-xs text-slate-500">${firm.invoice_count}</td>
+      <td class="px-4 py-2 text-center">
+        <span class="inline-flex items-center gap-1">
+          ${firm.is_overdue ? '<span title="Has an overdue invoice" class="text-[11px] leading-none">🚩</span>' : ''}
+          <span class="text-xs px-2 py-1 rounded-full ${statusStyles[firm.status] || 'bg-slate-100 text-slate-600'}">${firm.status}</span>
+        </span>
+      </td>
+    `;
+    ledgerBody.appendChild(row);
+  });
+}
+
+// Jumps straight to this firm's chat in the simulator panel — same
+// navigation "Message this Firm" in the invoices modal uses.
+async function goToFirmChat(clientId) {
+  firmSelect.value = clientId;
+  updateChatHeader();
+  await loadFirmChatHistory(clientId, { fullReload: true });
+}
+
+async function openFirmInvoicesModal(clientId) {
+  const res = await authFetch(`/api/firms/${clientId}/invoices`);
+  const data = await res.json();
+
+  document.getElementById('firmInvoicesTitle').textContent = `${data.business_name} — Invoices`;
+  const body = document.getElementById('firmInvoicesBody');
+  body.innerHTML = data.invoices.map(inv => `
+    <div class="flex items-center justify-between border border-slate-100 rounded-lg px-3 py-2">
+      <div>
+        <div class="font-medium text-sm">${inv.invoice_number}</div>
+        <div class="text-xs text-slate-400">
+          Due ${fmtDate(inv.due_date)}
+          ${inv.is_overdue ? `<span class="text-red-600 font-semibold ml-1">🚩 ${inv.days_overdue}d overdue</span>` : ''}
+        </div>
+      </div>
+      <div class="text-right">
+        <div class="font-semibold text-sm">${fmtMoney(inv.balance_amount)}</div>
+        <span class="text-xs px-2 py-0.5 rounded-full ${statusStyles[inv.status] || 'bg-slate-100 text-slate-600'}">${inv.status}</span>
+      </div>
+      <a href="${withAuthToken(`/api/invoices/${inv.id}/pdf`)}" target="_blank" class="text-xs text-emerald-600 hover:underline ml-3">PDF</a>
+      ${inv.status === 'PAID' ? `<a href="${withAuthToken(`/api/invoices/${inv.id}/receipt-pdf`)}" target="_blank" class="text-xs text-emerald-700 font-semibold hover:underline ml-2">Receipt</a>` : ''}
+    </div>
+  `).join('');
+
+  document.getElementById('firmInvoicesMessageBtn').onclick = async () => {
+    document.getElementById('firmInvoicesModal').classList.add('hidden');
+    await goToFirmChat(clientId);
+  };
+
+  const insightsPanel = document.getElementById('firmInsightsPanel');
+  insightsPanel.classList.add('hidden');
+  insightsPanel.innerHTML = '';
+  document.getElementById('firmInsightsBtn').onclick = async () => {
+    insightsPanel.classList.remove('hidden');
+    insightsPanel.innerHTML = `<div class="text-xs text-slate-500">Analyzing payment history…</div>`;
+    try {
+      const iRes = await authFetch(`/api/firms/${clientId}/insights`);
+      const stats = await iRes.json();
+      const riskColors = {
+        LOW: 'bg-emerald-100 text-emerald-700',
+        MEDIUM: 'bg-amber-100 text-amber-700',
+        HIGH: 'bg-red-100 text-red-700',
+      };
+      insightsPanel.innerHTML = `
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-bold uppercase tracking-wide text-emerald-800">🧠 AI Insights</span>
+          <span class="text-xs px-2 py-0.5 rounded-full font-semibold ${riskColors[stats.risk_level] || 'bg-slate-100 text-slate-600'}">${stats.risk_level} RISK</span>
+        </div>
+        <p class="text-sm text-slate-700 mb-2">${stats.summary}</p>
+        <p class="text-sm text-slate-800 font-medium mb-3">👉 ${stats.recommended_action}</p>
+        <div class="grid grid-cols-2 gap-2 text-xs text-slate-600">
+          <div>On-time rate: <b>${stats.on_time_payment_rate_pct != null ? stats.on_time_payment_rate_pct + '%' : '—'}</b></div>
+          <div>Avg days late: <b>${stats.avg_days_late_when_late != null ? stats.avg_days_late_when_late : '—'}</b></div>
+          <div>Broken promises: <b>${stats.broken_promises}</b></div>
+          <div>Disputes: <b>${stats.dispute_count}</b></div>
+        </div>
+      `;
+    } catch (err) {
+      insightsPanel.innerHTML = `<div class="text-xs text-red-600">Couldn't load insights right now.</div>`;
+    }
+  };
+
+  document.getElementById('firmInvoicesModal').classList.remove('hidden');
+}
+
+// --------------------------------------------------------------------------
+// FIRM ANALYSIS REPORT — 📊 icon in the ledger. Bigger and chart-based,
+// unlike the quick "🧠 AI Insights" blurb inside the invoices modal. All
+// chart data comes pre-computed from /api/firms/{id}/analysis — this
+// function only renders it, it never computes any figure itself.
+// --------------------------------------------------------------------------
+let analysisChartInstances = [];
+
+function destroyAnalysisCharts() {
+  analysisChartInstances.forEach(c => c.destroy());
+  analysisChartInstances = [];
+}
+
+const RISK_BADGE_STYLES = {
+  LOW: 'bg-emerald-100 text-emerald-700',
+  MEDIUM: 'bg-amber-100 text-amber-700',
+  HIGH: 'bg-red-100 text-red-700',
+};
+
+async function openFirmAnalysisModal(clientId) {
+  const modal = document.getElementById('firmAnalysisModal');
+  const body = document.getElementById('analysisBody');
+  const riskBadge = document.getElementById('analysisRiskBadge');
+  modal.classList.remove('hidden');
+  riskBadge.classList.add('hidden');
+  body.innerHTML = `<div class="text-sm text-slate-500">Loading analysis…</div>`;
+  destroyAnalysisCharts();
+
+  let data;
+  try {
+    const res = await authFetch(`/api/firms/${clientId}/analysis`);
+    data = await res.json();
+  } catch (err) {
+    body.innerHTML = `<div class="text-sm text-red-600">Couldn't load the analysis report right now.</div>`;
+    return;
+  }
+
+  document.getElementById('analysisFirmName').textContent = `${data.business_name} — Analysis Report`;
+  document.getElementById('analysisFirmSub').textContent = `${data.contact_name} · ${data.phone_number}`;
+  riskBadge.textContent = `${data.risk_level} RISK`;
+  riskBadge.className = `text-xs px-2 py-1 rounded-full font-semibold ${RISK_BADGE_STYLES[data.risk_level] || 'bg-slate-100 text-slate-600'}`;
+  riskBadge.classList.remove('hidden');
+
+  const statCard = (label, value) => `
+    <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+      <div class="text-[11px] uppercase tracking-wide text-slate-400 mb-1">${label}</div>
+      <div class="text-lg font-bold text-slate-800">${value}</div>
+    </div>`;
+
+  body.innerHTML = `
+    <div class="border border-emerald-200 bg-emerald-50 rounded-lg p-4">
+      <div class="text-xs font-bold uppercase tracking-wide text-emerald-800 mb-1">🧠 AI Summary</div>
+      <p class="text-sm text-slate-700 mb-2">${data.summary}</p>
+      <p class="text-sm text-slate-800 font-medium">👉 ${data.recommended_action}</p>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      ${statCard('Outstanding', fmtMoney(data.total_outstanding))}
+      ${statCard('On-time rate', data.on_time_payment_rate_pct != null ? data.on_time_payment_rate_pct + '%' : '—')}
+      ${statCard('Avg days late', data.avg_days_late_when_late != null ? data.avg_days_late_when_late : '—')}
+      ${statCard('Broken promises', data.broken_promises)}
+      ${statCard('Disputes', data.dispute_count)}
+      ${statCard('Overdue invoices', data.overdue_invoice_count)}
+      ${statCard('Max days overdue', data.max_days_overdue)}
+      ${statCard('Paid historically', data.paid_invoice_count_historical)}
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">Outstanding Balance Over Time</div>
+        <canvas id="chartBalanceHistory" height="180"></canvas>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">Monthly Collections</div>
+        <canvas id="chartMonthlyCollections" height="180"></canvas>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">Invoice Status Breakdown</div>
+        <canvas id="chartStatusBreakdown" height="180"></canvas>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">Days Late Trend (paid invoices)</div>
+        <canvas id="chartDaysLateTrend" height="180"></canvas>
+      </div>
+    </div>
+
+    <div>
+      <div class="text-xs font-semibold text-slate-600 mb-2">Full Invoice History</div>
+      <div class="border border-slate-200 rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-500 text-xs uppercase">
+            <tr>
+              <th class="text-left px-3 py-2">Invoice</th>
+              <th class="text-left px-3 py-2">Due Date</th>
+              <th class="text-right px-3 py-2">Total</th>
+              <th class="text-right px-3 py-2">Balance</th>
+              <th class="text-center px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.invoices.map(inv => `
+              <tr class="border-t border-slate-100">
+                <td class="px-3 py-2">${inv.invoice_number}</td>
+                <td class="px-3 py-2 text-xs text-slate-500">${fmtDate(inv.due_date)}${inv.is_overdue ? ` <span class="text-red-600 font-semibold">🚩 ${inv.days_overdue}d</span>` : ''}</td>
+                <td class="px-3 py-2 text-right">${fmtMoney(inv.total_amount)}</td>
+                <td class="px-3 py-2 text-right font-semibold">${fmtMoney(inv.balance_amount)}</td>
+                <td class="px-3 py-2 text-center"><span class="text-xs px-2 py-0.5 rounded-full ${statusStyles[inv.status] || 'bg-slate-100 text-slate-600'}">${inv.status}</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  renderAnalysisCharts(data);
+}
+
+function renderAnalysisCharts(data) {
+  const emerald = '#059669', slate = '#64748b', amber = '#d97706', red = '#dc2626';
+
+  // 1. Running balance over time (line)
+  const balCtx = document.getElementById('chartBalanceHistory');
+  if (balCtx && data.balance_history.length > 0) {
+    analysisChartInstances.push(new Chart(balCtx, {
+      type: 'line',
+      data: {
+        labels: data.balance_history.map(p => fmtDate(p.date)),
+        datasets: [{
+          label: 'Balance',
+          data: data.balance_history.map(p => p.balance),
+          borderColor: emerald, backgroundColor: 'rgba(5,150,105,0.1)',
+          fill: true, tension: 0.2, pointRadius: 2,
+        }],
+      },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    }));
+  } else if (balCtx) {
+    balCtx.replaceWith(Object.assign(document.createElement('div'), { className: 'text-xs text-slate-400 py-8 text-center', textContent: 'No history yet.' }));
+  }
+
+  // 2. Monthly collections (bar)
+  const monCtx = document.getElementById('chartMonthlyCollections');
+  if (monCtx && data.monthly_collections.length > 0) {
+    analysisChartInstances.push(new Chart(monCtx, {
+      type: 'bar',
+      data: {
+        labels: data.monthly_collections.map(m => m.month),
+        datasets: [{ label: 'Collected', data: data.monthly_collections.map(m => m.amount), backgroundColor: emerald }],
+      },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    }));
+  } else if (monCtx) {
+    monCtx.replaceWith(Object.assign(document.createElement('div'), { className: 'text-xs text-slate-400 py-8 text-center', textContent: 'No payments collected yet.' }));
+  }
+
+  // 3. Status breakdown (doughnut)
+  const statusCtx = document.getElementById('chartStatusBreakdown');
+  if (statusCtx) {
+    const labels = Object.keys(data.status_breakdown).filter(k => data.status_breakdown[k] > 0);
+    const colorMap = { PENDING: amber, PARTIALLY_PAID: '#2563eb', PAID: emerald, DISPUTED: red };
+    if (labels.length > 0) {
+      analysisChartInstances.push(new Chart(statusCtx, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{ data: labels.map(k => data.status_breakdown[k]), backgroundColor: labels.map(k => colorMap[k] || slate) }],
+        },
+        options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } },
+      }));
+    } else {
+      statusCtx.replaceWith(Object.assign(document.createElement('div'), { className: 'text-xs text-slate-400 py-8 text-center', textContent: 'No invoices yet.' }));
+    }
+  }
+
+  // 4. Days-late trend (bar, negative = early, positive = late)
+  const dltCtx = document.getElementById('chartDaysLateTrend');
+  if (dltCtx && data.days_to_pay_trend.length > 0) {
+    analysisChartInstances.push(new Chart(dltCtx, {
+      type: 'bar',
+      data: {
+        labels: data.days_to_pay_trend.map(d => d.invoice_number),
+        datasets: [{
+          label: 'Days late (negative = early)',
+          data: data.days_to_pay_trend.map(d => d.days_late),
+          backgroundColor: data.days_to_pay_trend.map(d => d.days_late > 0 ? red : emerald),
+        }],
+      },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    }));
+  } else if (dltCtx) {
+    dltCtx.replaceWith(Object.assign(document.createElement('div'), { className: 'text-xs text-slate-400 py-8 text-center', textContent: 'No fully-paid invoices yet.' }));
+  }
+}
+
+async function loadAuditLogs() {
+  const res = await authFetch('/api/audit-logs?limit=50');
+  const data = await res.json();
+  auditBody.innerHTML = '';
+
+  data.audit_logs.forEach(log => {
+    const div = document.createElement('div');
+    div.className = `border rounded-lg p-3 text-xs ${auditStatusStyles[log.status] || 'border-slate-200'}`;
+    const time = new Date(log.timestamp).toLocaleTimeString();
+    div.innerHTML = `
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-semibold">${log.detected_intent}</span>
+        <span class="text-[10px] uppercase tracking-wide font-bold">${log.status}</span>
+      </div>
+      <div class="text-slate-600 mb-1">"${log.incoming_message}"</div>
+      <div class="text-slate-500">Action: <span class="font-medium">${log.action_taken}</span> · ${time}</div>
+      ${log.execution_payload ? `<pre class="mt-1 bg-white/70 rounded p-2 overflow-x-auto text-[10px]">${JSON.stringify(log.execution_payload, null, 2)}</pre>` : ''}
+    `;
+    auditBody.appendChild(div);
+  });
+}
+
+function collectionStatusClass(status) {
+  const map = {
+    OVERDUE: 'bg-red-50 border-red-200', PROMISED: 'bg-amber-50 border-amber-200',
+    DISPUTED: 'bg-red-50 border-red-200', ESCALATED: 'bg-red-50 border-red-200',
+    PARTIALLY_PAID: 'bg-blue-50 border-blue-200', DUE: 'bg-amber-50 border-amber-200',
+    NOT_DUE: 'bg-slate-50 border-slate-200'
+  };
+  return map[status] || 'bg-white border-slate-200';
+}
+
+async function loadCollectionCenter() {
+  try {
+    const [sumRes, queueRes] = await Promise.all([
+      authFetch('/api/collections/summary'),
+      authFetch('/api/collections/queue?limit=8')
+    ]);
+    const summary = await sumRes.json();
+    const queue = await queueRes.json();
+    const metrics = [
+      ['Outstanding', fmtMoney(summary.outstanding)],
+      ['Recovered', fmtMoney(summary.recovered_total)],
+      ['Due today', summary.due_today],
+      ['Overdue', summary.overdue_invoices],
+      ['Promises', summary.active_promises],
+      ['Broken', summary.broken_promises],
+    ];
+    document.getElementById('collection-metrics').innerHTML = metrics.map(([label, value]) => `
+      <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+        <div class="text-[10px] uppercase tracking-wide text-slate-400">${label}</div>
+        <div class="text-sm font-bold text-slate-800 mt-0.5">${value}</div>
+      </div>`).join('');
+    const box = document.getElementById('collection-queue');
+    if (!queue.items.length) {
+      box.innerHTML = '<div class="col-span-full text-xs text-slate-400 py-4 text-center">No outstanding collections need attention right now.</div>';
+      return;
+    }
+    box.innerHTML = queue.items.map(item => `
+      <div class="rounded-lg border p-3 ${collectionStatusClass(item.status)} cursor-pointer hover:shadow-sm" onclick="goToFirmChat(${item.client_id})">
+        <div class="flex items-start justify-between gap-2">
+          <div><div class="font-semibold text-sm">${escapeHtml(item.business_name)}</div><div class="text-[10px] text-slate-500">${escapeHtml(item.contact_name || '')}</div></div>
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/70">${item.status}</span>
+        </div>
+        <div class="mt-2 flex items-end justify-between"><div><div class="text-[10px] text-slate-400">Outstanding</div><div class="font-bold">${fmtMoney(item.outstanding)}</div></div><div class="text-right"><div class="text-[10px] text-slate-400">Priority</div><div class="font-semibold">${item.priority_score}</div></div></div>
+        <div class="mt-2 text-[10px] text-slate-500">${item.target_invoice} · ${item.days_overdue > 0 ? item.days_overdue + 'd overdue' : 'not overdue'}</div>
+        ${item.promise ? `<div class="mt-1 text-[10px] text-amber-700">Promise: ${item.promise.amount ? fmtMoney(item.promise.amount) : 'payment'} by ${new Date(item.promise.date).toLocaleDateString()}</div>` : ''}
+        ${item.broken_promises ? `<div class="mt-1 text-[10px] text-red-700 font-semibold">${item.broken_promises} broken promise(s)</div>` : ''}
+      </div>`).join('');
+  } catch (err) {
+    console.warn('Collection center refresh failed', err);
+  }
+}
+
+async function refreshAll() {
+  await loadFirms();
+  await loadCollectionCenter();
+  await loadAuditLogs();
+  if (firmSelect.value) await loadFirmChatHistory(firmSelect.value);
+}
+
+document.querySelectorAll('.quick-msg').forEach(btn => {
+  btn.addEventListener('click', () => { messageInput.value = btn.dataset.msg; });
+});
+
+firmSelect.addEventListener('change', async () => {
+  updateChatHeader();
+  await loadFirmChatHistory(firmSelect.value, { fullReload: true });
+});
+
+messageInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); sendBtn.click(); }
+});
+
+sendBtn.addEventListener('click', async () => {
+  const clientId = firmSelect.value;
+  const message = messageInput.value.trim();
+  if (!clientId || !message) return;
+
+  appendBubble('buyer', escapeHtml(message));
+  messageInput.value = '';
+  const typingEl = appendTypingIndicator();
+  sendBtn.disabled = true;
+
+  try {
+    const res = await authFetch('/api/simulate-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: Number(clientId),
+        message,
+        invoice_id: currentTargetInvoiceId || undefined,
+      }),
+    });
+    const data = await res.json();
+
+    currentTargetInvoiceId = (data.action_taken === 'MULTI_INVOICE_BREAKDOWN' || data.action_taken === 'INVOICE_CHOICE_PROMPT')
+      ? null
+      : data.invoice_id;
+
+    typingEl.remove();
+    appendBubble('bot', formatBotText(data.bot_reply_text), data.invoice_pdf_url);
+    appendOptionChips(data.options);
+    renderedMessageCount += 2;
+
+    await Promise.all([
+      loadFirms(),
+      loadAuditLogs()
+    ]);
+  } catch (err) {
+    typingEl.remove();
+    appendBubble('bot', 'Something went wrong sending that. Please try again.');
+  } finally {
+    sendBtn.disabled = false;
+  }
+});
+
+// ← new block goes here, as its own top-level listener
+const checkPaymentBtn = document.getElementById('check-payment-btn');
+checkPaymentBtn.addEventListener('click', async () => {
+  if (!currentTargetInvoiceId) return;
+  const invoiceBeingChecked = currentTargetInvoiceId; // pin it before the refresh below can touch it
+  checkPaymentBtn.disabled = true;
+  try {
+    await authFetch(`/api/invoices/${invoiceBeingChecked}/check-now`, { method: 'POST' });
+    await loadFirmChatHistory(currentFirmId, { fullReload: true, syncTargetInvoice: false });
+    currentTargetInvoiceId = invoiceBeingChecked; // restore explicitly — fullReload rebuilds the whole thread
+    await loadFirms();
+  } catch (err) {
+    console.error('Payment check failed', err);
+  } finally {
+    checkPaymentBtn.disabled = false;
+  }
+});
+
+// ---- Onboarding modal: existing-firm dropdown vs new-firm fields ----
+
+function toggleFirmMode() {
+  const mode = document.querySelector('input[name="firmMode"]:checked').value;
+  document.getElementById('existingFirmField').classList.toggle('hidden', mode !== 'existing');
+  document.getElementById('newFirmFields').classList.toggle('hidden', mode !== 'new');
+}
+
+async function populateExistingFirmDropdown() {
+  const select = document.getElementById('obExistingFirm');
+  select.innerHTML = '';
+  
+  // Change /api/firms?view=active -> /api/clients
+  const res = await authFetch('/api/clients');
+  const data = await res.json();
+  
+  if (!data.clients || data.clients.length === 0) {
+    select.innerHTML = '<option value="">No existing firms — use "New Firm"</option>';
+    return;
+  }
+
+  // Populate dropdown using clients array
+  data.clients.forEach(client => {
+    const opt = document.createElement('option');
+    opt.value = client.id;
+    opt.textContent = `${client.business_name} (${client.name}) — ${client.phone_number}`;
+    select.appendChild(opt);
+  });
+}
+
+async function openOnboardModal() {
+  await populateExistingFirmDropdown();
+  // NEW (Feature 3): default Due Date to +30 days every time the modal opens.
+  const dueDateInput = document.getElementById('obDueDate');
+  const defaultDue = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  dueDateInput.value = defaultDue.toISOString().slice(0, 10);
+  document.getElementById('onboardModal').classList.remove('hidden');
+}
+
+async function handleOnboard(e) {
+  e.preventDefault();
+  const mode = document.querySelector('input[name="firmMode"]:checked').value;
+
+  const payload = {
+    total_amount: parseFloat(document.getElementById('obTotal').value),
+    upfront_paid: parseFloat(document.getElementById('obUpfront').value || 0),
+    due_date: document.getElementById('obDueDate').value, // NEW (Feature 3)
+  };
+
+  if (mode === 'existing') {
+    const clientId = document.getElementById('obExistingFirm').value;
+    if (!clientId) { alert('Select an existing firm, or switch to "New Firm".'); return; }
+    payload.client_id = Number(clientId);
+  } else {
+    payload.client_name = document.getElementById('obName').value;
+    payload.business_name = document.getElementById('obBusiness').value;
+    payload.phone_number = document.getElementById('obPhone').value;
+  }
+
+  const res = await authFetch('/api/onboard-client', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+
+  if (res.ok) {
+    document.getElementById('onboardModal').classList.add('hidden');
+    document.getElementById('onboardForm').reset();
+    await loadFirms();
+
+    firmSelect.value = data.client_id;
+    updateChatHeader();
+    await loadFirmChatHistory(data.client_id, { fullReload: true });
+    await loadAuditLogs();
+  } else {
+    alert(data.detail || 'Failed to onboard client');
+  }
+}
+
+// --------------------------------------------------------------------------
+// COLLECTIONS COPILOT — portfolio-level chat for the wholesaler. Separate
+// from the buyer-facing simulator: this talks to /api/copilot/message,
+// which classifies intent then answers/acts using real DB data (see
+// backend for the "LLM classifies, code computes" split).
+// --------------------------------------------------------------------------
+let copilotHistory = []; // [{sender: 'wholesaler'|'copilot', text}]
+let copilotPendingAction = null; // echoed back on the next turn so 'yes'/'no' resolves deterministically
+const copilotPanel = document.getElementById('copilotPanel');
+const copilotMessages = document.getElementById('copilotMessages');
+const copilotInput = document.getElementById('copilotInput');
+
+document.getElementById('copilotLauncher').addEventListener('click', () => {
+  copilotPanel.classList.toggle('hidden');
+  if (!copilotPanel.classList.contains('hidden') && copilotMessages.children.length === 0) {
+    appendCopilotBubble('copilot',
+      "Hi! I can tell you which firms haven't paid, which firms need a reminder, send reminders to firms due soon or overdue, look up a specific firm, or generate an invoice PDF. What would you like to know?"
+    );
+  }
+});
+document.getElementById('copilotCloseBtn').addEventListener('click', () => {
+  copilotPanel.classList.add('hidden');
+  copilotPendingAction = null;
+});
+
+function appendCopilotBubble(sender, text, pdfUrl) {
+  const wrap = document.createElement('div');
+  wrap.className = `flex ${sender === 'wholesaler' ? 'justify-end' : 'justify-start'}`;
+  const bubble = document.createElement('div');
+  bubble.className = `max-w-[85%] rounded-lg px-3 py-2 shadow-sm whitespace-pre-wrap ${sender === 'wholesaler' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200'}`;
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  copilotMessages.appendChild(wrap);
+
+  if (pdfUrl) {
+    const btnWrap = document.createElement('div');
+    btnWrap.className = 'flex justify-start';
+    const btn = document.createElement('a');
+    btn.href = withAuthToken(pdfUrl);
+    btn.target = '_blank';
+    btn.className = 'inline-block mt-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 hover:bg-emerald-100';
+    btn.textContent = '📄 Download PDF';
+    btnWrap.appendChild(btn);
+    copilotMessages.appendChild(btnWrap);
+  }
+
+  copilotMessages.scrollTop = copilotMessages.scrollHeight;
+}
+
+async function sendCopilotMessage() {
+  const text = copilotInput.value.trim();
+  if (!text) return;
+  copilotInput.value = '';
+  appendCopilotBubble('wholesaler', text);
+  copilotHistory.push({ sender: 'wholesaler', text });
+
+  const thinking = document.createElement('div');
+  thinking.className = 'text-xs text-slate-400 italic';
+  thinking.textContent = 'Thinking…';
+  copilotMessages.appendChild(thinking);
+  copilotMessages.scrollTop = copilotMessages.scrollHeight;
+
+  try {
+    const res = await authFetch('/api/copilot/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history: copilotHistory.slice(-8), pending_action: copilotPendingAction }),
+    });
+    const data = await res.json();
+    thinking.remove();
+    appendCopilotBubble('copilot', data.reply_text, data.pdf_url);
+    copilotHistory.push({ sender: 'copilot', text: data.reply_text });
+    copilotPendingAction = data.pending_action || null; // null unless this turn proposed a fresh action to confirm
+    if (data.reminders_sent > 0) {
+      await refreshAll(); // reflect any newly-sent reminders in the ledger/audit views
+    }
+  } catch (err) {
+    thinking.remove();
+    appendCopilotBubble('copilot', "Sorry, I couldn't process that just now.");
+  }
+}
+
+document.getElementById('copilotSendBtn').addEventListener('click', sendCopilotMessage);
+copilotInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendCopilotMessage();
+});
+
+let appStarted = false;
+async function startApp() {
+  if (appStarted) return;
+  appStarted = true;
+  await refreshAll();
+  if (firmSelect.value) await loadFirmChatHistory(firmSelect.value, { fullReload: true });
+  setInterval(refreshAll, 4000);
+}
+
+if (authToken) {
+  hideLoginOverlay();
+  startApp();
+} else {
+  showLoginOverlay();
+}
+</script>
+
+</body>
+</html>
