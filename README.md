@@ -1,5 +1,4 @@
-# LedgerRecover AI(https://ledger-recovery-ai.onrender.com/)
-password for login:admin
+# LedgerRecover AI(https://ledger-recovery-ai.onrender.com/). password for login:admin
 **Autonomous B2B Trade-Credit Collections Agent** — built for the Razorpay AI Buildathon.
 
 LedgerRecover AI is a single-tenant dashboard + AI agent that lets a wholesaler who sells on credit (the classic Indian B2B "khata"/trade-credit model) automate the entire collections lifecycle: sending invoices, chasing buyers over a WhatsApp-style chat, understanding free-text replies ("I'll pay 20k today, rest next Friday"), creating Razorpay payment links, reconciling payments, tracking promises-to-pay, escalating unresponsive accounts, and generating invoice/receipt PDFs — with a human wholesaler supervising from one dashboard and an AI "Copilot" to query the whole portfolio in plain English.
