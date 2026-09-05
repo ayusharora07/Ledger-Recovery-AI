@@ -10,7 +10,7 @@ import secrets
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 import re
 from difflib import SequenceMatcher
@@ -130,7 +130,7 @@ def login(payload: LoginRequest):
 
 # How often the background poller checks outstanding payment links.
 POLL_INTERVAL_SECONDS = 12
-PAYMENT_LINK_EXPIRY_MINUTES = 10
+PAYMENT_LINK_EXPIRY_MINUTES = 20
 _DEAD_LINK_IDS: set[str] = set()  # payment_link_ids confirmed permanently gone (e.g. from a rotated/old
                                    # Razorpay key) — skipped on future poll cycles instead of re-fetched forever
 
@@ -448,12 +448,12 @@ def synthesize_bot_reply_text(detected_intent: str, action_taken: str, status: s
             if invoice_numbers and len(invoice_numbers) > 1:
                 return (
                     f"Sure! Here's a single payment link covering all {len(invoice_numbers)} "
-                    f"outstanding invoices ({amount_str} total): {url}.{expiry_note}"
+                    f"outstanding invoices ({amount_str} total): {url}{expiry_note}"
                 )
             invoice_number = execution_payload.get("invoice_number")
             if invoice_number:
-                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}.{expiry_note}"
-            return f"Sure! Here's your payment link for {amount_str}: {url}.{expiry_note}"
+                return f"Sure! Here's your payment link for {amount_str} towards invoice {invoice_number}: {url}{expiry_note}"
+            return f"Sure! Here's your payment link for {amount_str}: {url}{expiry_note}"
         if status == "SUCCESS":
             # Marked SUCCESS but the link URL itself is missing (malformed or
             # legacy payload) — never claim a link exists without actually
@@ -753,7 +753,7 @@ def get_or_create_payment_link(
         invoice_number=invoice.invoice_number,
         description=description or f"Payment for {invoice.invoice_number}",
         reference_id=ref_id,
-        expire_by=int((datetime.utcnow() + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
+        expire_by=int((datetime.now(timezone.utc) + timedelta(minutes=PAYMENT_LINK_EXPIRY_MINUTES)).timestamp()),
         invoice_numbers=invoice_numbers,
     )
     cancel_stale_payment_links(db, invoice, exclude_link_id=link_res["id"])
